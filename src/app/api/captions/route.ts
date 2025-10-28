@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import OpenAI from "openai";
 
+export const runtime = "nodejs";
+
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
@@ -155,13 +157,6 @@ export async function POST(request: Request) {
   let mode: Mode | null = null;
 
   try {
-    if (!process.env.OPENAI_API_KEY) {
-      return NextResponse.json(
-        { error: "Something went wrong" },
-        { status: 500 },
-      );
-    }
-
     const formData = await request.formData();
     const modeValue = formData.get("mode");
 
@@ -170,6 +165,17 @@ export async function POST(request: Request) {
     }
 
     mode = modeValue as Mode;
+
+    if (!process.env.OPENAI_API_KEY) {
+      if (mode === "captions") {
+        return NextResponse.json(
+          { mode, items: buildFallbackCaptions() },
+          { status: 200 },
+        );
+      }
+
+      return NextResponse.json({ mode, items: buildFallbackBios() }, { status: 200 });
+    }
 
     const toneRaw = formData.get("tone");
     const tone =
