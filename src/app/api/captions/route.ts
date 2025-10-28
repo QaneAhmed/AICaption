@@ -24,41 +24,73 @@ const maxBioGuidanceLength = 400;
 const maxCharsMin = 40;
 const maxCharsMax = 220;
 
+const MAX_OPENAI_ATTEMPTS = 3;
+
 async function callOpenAI(messages: OpenAI.ChatCompletionMessageParam[]) {
-  const response = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
-    temperature: 0.8,
-    messages,
-  });
+  let lastError: unknown = null;
 
-  const content = response.choices[0]?.message?.content;
-  if (!content) {
-    throw new Error("Empty response from model");
-  }
+  for (let attempt = 1; attempt <= MAX_OPENAI_ATTEMPTS; attempt += 1) {
+    try {
+      const response = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        temperature: 0.8,
+        messages,
+      });
 
-  if (typeof content === "string") {
-    return content.trim();
-  }
+      const content = response.choices[0]?.message?.content;
+      if (!content) {
+        throw new Error("Empty response from model");
+      }
 
-  if (Array.isArray(content)) {
-    const parts = content as Array<
-      | string
-      | {
-          text?: string | null;
+      if (typeof content === "string") {
+        return content.trim();
+      }
+
+      if (Array.isArray(content)) {
+        const parts = content as Array<
+          | string
+          | {
+              text?: string | null;
+            }
+        >;
+
+        return parts
+          .map((part) => {
+            if (typeof part === "string") return part;
+            if ("text" in part && part.text) return part.text;
+            return "";
+          })
+          .join("\n")
+          .trim();
+      }
+
+      return String(content).trim();
+    } catch (error) {
+      lastError = error;
+
+      if (error instanceof OpenAI.RateLimitError || (error as { status?: number }).status === 429) {
+        const headers = (error as { headers?: Headers }).headers;
+        const retryAfterHeader = headers?.get?.("retry-after");
+        const retryAfterSeconds = retryAfterHeader ? Number.parseFloat(retryAfterHeader) : NaN;
+        const waitSeconds = Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0 ? retryAfterSeconds : 20;
+
+        if (attempt === MAX_OPENAI_ATTEMPTS) {
+          break;
         }
-    >;
 
-    return parts
-      .map((part) => {
-        if (typeof part === "string") return part;
-        if ("text" in part && part.text) return part.text;
-        return "";
-      })
-      .join("\n")
-      .trim();
+        await sleep(waitSeconds * 1000);
+        continue;
+      }
+
+      throw error;
+    }
   }
 
-  return String(content).trim();
+  throw lastError ?? new Error("OpenAI request failed");
+}
+
+function sleep(durationMs: number) {
+  return new Promise((resolve) => setTimeout(resolve, durationMs));
 }
 
 function parseCaptionsPayload(raw: string) {
